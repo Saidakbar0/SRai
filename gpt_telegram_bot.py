@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import asyncio
 import tempfile
 from datetime import datetime
