@@ -1,8 +1,12 @@
 import os
 import asyncio
 import tempfile
-import time
+import threading
 from datetime import datetime
+
+from fastapi import FastAPI
+import uvicorn
+
 from openai import OpenAI
 from telegram import Update
 from telegram.ext import (
@@ -14,8 +18,8 @@ from telegram.ext import (
 from tabulate import tabulate
 
 # ================= CONFIG =================
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -26,7 +30,7 @@ Answer clearly in Uzbek unless user asks otherwise.
 
 # ================= MEMORY =================
 user_memory = {}
-logs = []  # terminal jadvali uchun
+logs = []
 
 # ================= LOGGER =================
 def log_event(user, user_id, action, status, detail):
@@ -42,7 +46,7 @@ def log_event(user, user_id, action, status, detail):
     os.system("clear")
     print("🤖 TELEGRAM AI BOT — REAL TIME MONITOR\n")
     print(tabulate(
-        logs[-15:],  # oxirgi 15 ta
+        logs[-15:],
         headers=["Time", "User", "User ID", "Action", "Status", "Detail"],
         tablefmt="grid"
     ))
@@ -85,12 +89,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.username or "unknown"
     user_id = update.effective_user.id
     text = update.message.text
-
     lower = text.lower()
 
     if any(k in lower for k in ["rasm", "chiz", "logo", "image"]):
         log_event(user, user_id, "IMAGE REQUEST", "RUNNING", text)
-
         try:
             image_url = await generate_image(text)
             await update.message.reply_photo(image_url)
@@ -133,10 +135,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = await get_gpt_reply(user_id)
     await update.message.reply_text(reply)
 
-# ================= MAIN =================
-def main():
+# ================= TELEGRAM BOT START =================
+def start_telegram_bot():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
@@ -144,6 +145,18 @@ def main():
     print("🤖 Telegram AI Bot ishga tushdi...\n")
     app.run_polling()
 
-if __name__ == "__main__":
-    main()
+# ================= FASTAPI SERVER =================
+api = FastAPI()
 
+@api.get("/")
+def health():
+    return {"status": "ok", "bot": "running"}
+
+# ================= MAIN =================
+if __name__ == "__main__":
+    # Telegram botni background thread’da ishga tushiramiz
+    threading.Thread(target=start_telegram_bot, daemon=True).start()
+
+    # Render beradigan PORT
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(api, host="0.0.0.0", port=port)
