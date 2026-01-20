@@ -145,13 +145,21 @@ async def startup():
     global telegram_app
 
     telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    telegram_app.add_handler(MessageHandler(filters.VOICE, handle_voice))
 
+    telegram_app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
+    )
+    telegram_app.add_handler(
+        MessageHandler(filters.VOICE, handle_voice)
+    )
+
+    # MUHIM QATORLAR
     await telegram_app.initialize()
+    await telegram_app.start()   # 🔥 SHU YETISHMAYOTGAN EDI
     await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
 
-    print("🤖 Telegram Webhook o‘rnatildi")
+    print("🤖 Telegram Webhook o‘rnatildi va bot tayyor")
+
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
