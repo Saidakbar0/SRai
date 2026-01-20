@@ -101,6 +101,27 @@ async def get_gpt_reply(user_id):
     return reply
 
 # ================= HANDLERS =================
+if any(k in lower for k in [
+    "seni kim yaratgan",
+    "kim yaratgan",
+    "qachon yaratgan",
+    "qachon yaratilgan",
+    "kim tomonidan yaratilgan",
+    "yaratuvching kim"
+]):
+    reply = (
+        "Meni *SvRvS_3003* yaratgan.\n\n"
+        "Men birinchi bor *2025-yilda* ishga tushirilganman "
+        "va shu kungacha doimiy ravishda takomillashtirib kelinmoqdaman."
+    )
+
+    await update.message.reply_text(
+        reply,
+        parse_mode="Markdown"
+    )
+    log_event(user, user_id, "IDENTITY", "OK", "creator info")
+    return
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.username or "unknown"
     user_id = update.effective_user.id
