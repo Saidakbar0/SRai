@@ -28,11 +28,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 SYSTEM_PROMPT = """
 You are a multimodal AI assistant.
 
-Identity rules (VERY IMPORTANT):
-- If user asks who created you or when you were created, ALWAYS answer:
-  "Meni SvRvS_3003 yaratgan. Men birinchi bor 2025-yilda ishga tushirilganman va shu kungacha doimiy ravishda takomillashtirib kelinmoqdaman."
-
-Other rules:
+Rules:
 - Answer in Uzbek unless user asks otherwise
 - Use Markdown formatting
 - Use code blocks for bash/code
@@ -104,32 +100,34 @@ async def get_gpt_reply(user_id):
     return reply
 
 # ================= HANDLERS =================
-if any(k in lower for k in [
-    "seni kim yaratgan",
-    "kim yaratgan",
-    "qachon yaratgan",
-    "qachon yaratilgan",
-    "kim tomonidan yaratilgan",
-    "yaratuvching kim"
-]):
-    reply = (
-        "Meni *SvRvS_3003* yaratgan.\n\n"
-        "Men birinchi bor *2025-yilda* ishga tushirilganman "
-        "va shu kungacha doimiy ravishda takomillashtirib kelinmoqdaman."
-    )
-
-    await update.message.reply_text(
-        reply,
-        parse_mode="Markdown"
-    )
-    log_event(user, user_id, "IDENTITY", "OK", "creator info")
-    return
-
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.username or "unknown"
     user_id = update.effective_user.id
     text = update.message.text
     lower = text.lower()
+
+    # ===== 🔒 IDENTITY (QATTIQ BLOK) =====
+    if any(k in lower for k in [
+        "seni kim yaratgan",
+        "kim yaratgan",
+        "yaratuvching kim",
+        "qachon yaratilgan",
+        "qachon yaratilgansan",
+        "kim tomonidan yaratilgan",
+        "qachon ishga tushirilgan"
+    ]):
+        reply = (
+            "Meni *SvRvS_3003* yaratgan.\n\n"
+            "Men birinchi bor *2025-yilda* ishga tushirilganman "
+            "va shu kungacha doimiy ravishda takomillashtirib kelinmoqdaman."
+        )
+
+        await update.message.reply_text(
+            reply,
+            parse_mode="Markdown"
+        )
+        log_event(user, user_id, "IDENTITY", "OK", "forced answer")
+        return
 
     # ===== STICKER =====
     if "stiker" in lower:
