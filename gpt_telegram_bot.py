@@ -20,7 +20,6 @@ from tabulate import tabulate
 # ================= CONFIG =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://xxx.onrender.com
 
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -28,12 +27,26 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 SYSTEM_PROMPT = """
 You are a multimodal AI assistant.
-Answer clearly in Uzbek unless user asks otherwise.
+
+Rules:
+- Answer in Uzbek unless user asks otherwise
+- Use Markdown formatting
+- Use code blocks for bash/code
+- Use tables when helpful
+- Use links when relevant
+- If user asks for bash, respond with ```bash
 """
 
 # ================= MEMORY =================
 user_memory = {}
 logs = []
+
+# ================= MARKDOWN ESCAPE =================
+def escape_markdown(text: str) -> str:
+    escape_chars = r"_*[]()~`>#+-=|{}.!"
+    for ch in escape_chars:
+        text = text.replace(ch, f"\\{ch}")
+    return text
 
 # ================= LOGGER =================
 def log_event(user, user_id, action, status, detail):
@@ -94,6 +107,15 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     lower = text.lower()
 
+    # ===== STICKER =====
+    if "stiker" in lower:
+        await update.message.reply_sticker(
+            sticker="CAACAgIAAxkBAAEKQdJl1"
+        )
+        log_event(user, user_id, "STICKER", "OK", "sent")
+        return
+
+    # ===== IMAGE =====
     if any(k in lower for k in ["rasm", "chiz", "logo", "image"]):
         log_event(user, user_id, "IMAGE", "RUNNING", text)
         try:
@@ -112,7 +134,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_memory[user_id] = history
 
     reply = await get_gpt_reply(user_id)
-    await update.message.reply_text(reply)
+
+    await update.message.reply_text(
+        escape_markdown(reply),
+        parse_mode="MarkdownV2",
+        disable_web_page_preview=False
+    )
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.username or "unknown"
@@ -134,7 +161,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_memory[user_id] = history
 
     reply = await get_gpt_reply(user_id)
-    await update.message.reply_text(reply)
+
+    await update.message.reply_text(
+        escape_markdown(reply),
+        parse_mode="MarkdownV2"
+    )
 
 # ================= FASTAPI =================
 app = FastAPI()
@@ -153,13 +184,11 @@ async def startup():
         MessageHandler(filters.VOICE, handle_voice)
     )
 
-    # MUHIM QATORLAR
     await telegram_app.initialize()
-    await telegram_app.start()   # 🔥 SHU YETISHMAYOTGAN EDI
+    await telegram_app.start()
     await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
 
     print("🤖 Telegram Webhook o‘rnatildi va bot tayyor")
-
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
