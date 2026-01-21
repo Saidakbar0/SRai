@@ -1,9 +1,5 @@
 import os
-from dotenv import load_dotenv
-load_dotenv()
-
 import asyncio
-import tempfile
 from datetime import datetime
 
 from fastapi import FastAPI, Request
@@ -13,208 +9,171 @@ from telegram import Update, Bot
 from telegram.ext import (
     Application,
     MessageHandler,
+    CommandHandler,
     ContextTypes,
     filters,
 )
 
 from openai import OpenAI
 from tabulate import tabulate
+from dotenv import load_dotenv
 
-# ================= CONFIG =================
+# ================= LOAD ENV =================
+load_dotenv()
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://xxx.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+
+if not TELEGRAM_TOKEN or not OPENAI_API_KEY or not WEBHOOK_URL:
+    raise RuntimeError("❌ ENV o‘zgaruvchilar yetarli emas")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-SYSTEM_PROMPT = """
-You are a multimodal AI assistant.
-
-Rules:
-- Answer in Uzbek unless user asks otherwise
-- Use Markdown formatting
-- Use code blocks for bash/code
-- Use tables when helpful
-- Use links when relevant
-"""
-
-# ================= MEMORY =================
-user_memory = {}
-logs = []
-
-# ================= MARKDOWN ESCAPE =================
-def escape_markdown(text: str) -> str:
-    escape_chars = r"_*[]()~`>#+-=|{}.!"
-    for ch in escape_chars:
-        text = text.replace(ch, f"\\{ch}")
-    return text
-
-# ================= LOGGER =================
-def log_event(user, user_id, action, status, detail):
-    logs.append([
-        datetime.now().strftime("%H:%M:%S"),
-        user,
-        user_id,
-        action,
-        status,
-        detail[:30]
-    ])
-
-    os.system("clear")
-    print("🤖 TELEGRAM AI BOT — REAL TIME MONITOR\n")
-    print(tabulate(
-        logs[-15:],
-        headers=["Time", "User", "User ID", "Action", "Status", "Detail"],
-        tablefmt="grid"
-    ))
-
-# ================= IMAGE =================
-async def generate_image(prompt):
-    return client.images.generate(
-        model="gpt-image-1",
-        prompt=prompt,
-        size="1024x1024"
-    ).data[0].url
-
-# ================= SPEECH TO TEXT =================
-async def speech_to_text(path):
-    with open(path, "rb") as f:
-        return client.audio.transcriptions.create(
-            file=f,
-            model="gpt-4o-transcribe"
-        ).text
-
-# ================= GPT =================
-async def get_gpt_reply(user_id):
-    history = user_memory.get(user_id, [])
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history[-20:]
-
-    response = await asyncio.to_thread(
-        lambda: client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=messages
-        )
-    )
-
-    reply = response.choices[0].message.content
-    history.append({"role": "assistant", "content": reply})
-    user_memory[user_id] = history
-    return reply
-
-# ================= HANDLERS =================
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user.username or "unknown"
-    user_id = update.effective_user.id
-    text = update.message.text
-    lower = text.lower()
-
-    # ===== 🔒 IDENTITY (QATTIQ BLOK) =====
-    if any(k in lower for k in [
-        "seni kim yaratgan",
-        "kim yaratgan",
-        "yaratuvching kim",
-        "qachon yaratilgan",
-        "qachon yaratilgansan",
-        "kim tomonidan yaratilgan",
-        "qachon ishga tushirilgan"
-    ]):
-        reply = (
-            "Meni *SvRvS_3003* yaratgan.\n\n"
-            "Men birinchi bor *2025-yilda* ishga tushirilganman "
-            "va shu kungacha doimiy ravishda takomillashtirib kelinmoqdaman."
-        )
-
-        await update.message.reply_text(
-            reply,
-            parse_mode="Markdown"
-        )
-        log_event(user, user_id, "IDENTITY", "OK", "forced answer")
-        return
-
-    # ===== STICKER =====
-    if "stiker" in lower:
-        await update.message.reply_sticker(
-            sticker="CAACAgIAAxkBAAEKQdJl1"
-        )
-        log_event(user, user_id, "STICKER", "OK", "sent")
-        return
-
-    # ===== IMAGE =====
-    if any(k in lower for k in ["rasm", "chiz", "logo", "image"]):
-        log_event(user, user_id, "IMAGE", "RUNNING", text)
-        try:
-            image_url = await generate_image(text)
-            await update.message.reply_photo(image_url)
-            log_event(user, user_id, "IMAGE", "OK", "sent")
-        except Exception as e:
-            log_event(user, user_id, "IMAGE", "ERROR", str(e))
-            await update.message.reply_text("⚠️ Rasm yaratib bo‘lmadi.")
-        return
-
-    log_event(user, user_id, "TEXT", "OK", text)
-
-    history = user_memory.get(user_id, [])
-    history.append({"role": "user", "content": text})
-    user_memory[user_id] = history
-
-    reply = await get_gpt_reply(user_id)
-
-    await update.message.reply_text(
-        escape_markdown(reply),
-        parse_mode="MarkdownV2",
-        disable_web_page_preview=False
-    )
-
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user.username or "unknown"
-    user_id = update.effective_user.id
-
-    log_event(user, user_id, "VOICE", "RUNNING", "download")
-
-    voice = update.message.voice
-    file = await voice.get_file()
-
-    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as f:
-        await file.download_to_drive(f.name)
-        text = await speech_to_text(f.name)
-
-    log_event(user, user_id, "VOICE→TEXT", "OK", text)
-
-    history = user_memory.get(user_id, [])
-    history.append({"role": "user", "content": text})
-    user_memory[user_id] = history
-
-    reply = await get_gpt_reply(user_id)
-
-    await update.message.reply_text(
-        escape_markdown(reply),
-        parse_mode="MarkdownV2"
-    )
 
 # ================= FASTAPI =================
 app = FastAPI()
 telegram_app: Application | None = None
 
+# ================= MEMORY =================
+user_memory = {}
+logs = []
+
+# ================= STICKER & GIF =================
+STICKER_OK = "CAACAgIAAxkBAAEF0GZlWwABjv0AAe8k7t7Jm0X5AAEAAcYAAj8uAAFXg0wYkzYwLh8E"
+STICKER_LAUGH = "CAACAgIAAxkBAAEF0GhlWwABk4mAAQAB3hZAAcWcAAEAAcYAAk0AAyJ6y1Zs8hE"
+
+GIF_LAUGH = "https://media.giphy.com/media/10JhviFuU2gWD6/giphy.gif"
+
+# ================= LOGGER =================
+def log_event(user, uid, action, text):
+    logs.append([
+        datetime.now().strftime("%H:%M:%S"),
+        user,
+        uid,
+        action,
+        text
+    ])
+
+    os.system("clear")
+    print(tabulate(
+        logs[-15:],
+        headers=["Time", "User", "ID", "Action", "Message"],
+        tablefmt="grid",
+        maxcolwidths=[8, 12, 10, 12, 80]
+    ))
+
+# ================= HELPERS =================
+def is_identity_q(text: str) -> bool:
+    return "kim yaratgan" in text.lower() or "qachon yaratilgan" in text.lower()
+
+def identity_answer() -> str:
+    return (
+        "🤖 *Men SvRvS_3003 tomonidan yaratilgan AI yordamchiman.*\n\n"
+        "• Birinchi marta: *2025-yilda ishga tushirilganman*\n"
+        "• Hozirgacha: *doimiy takomillashtirib kelinmoqda*\n"
+        "• Telegram uchun maxsus sozlanganman\n"
+    )
+
+def is_fun(text: str) -> bool:
+    return any(k in text.lower() for k in ["haha", "😂", "kul", "qiziq"])
+
+def is_sticker_request(text: str) -> bool:
+    return "stiker" in text.lower()
+
+def safe_markdown(text: str) -> str:
+    for ch in ["_", "*", "`"]:
+        text = text.replace(ch, f"\\{ch}")
+    return text
+
+# ================= GPT =================
+async def gpt_reply(uid: int):
+    history = user_memory.get(uid, [])
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Sen SvRvS_3003 tomonidan yaratilgan AI botsan. "
+                "2025-yilda ishga tushirilgansan. "
+                "Hech qachon OpenAI deb aytma."
+            )
+        }
+    ] + history[-20:]
+
+    try:
+        resp = await asyncio.to_thread(
+            lambda: client.chat.completions.create(
+                model="gpt-4.1-mini",
+                messages=messages
+            )
+        )
+        reply = resp.choices[0].message.content
+        history.append({"role": "assistant", "content": reply})
+        user_memory[uid] = history
+        return reply
+
+    except Exception as e:
+        return "⚠️ Hozircha AI band, birozdan keyin urinib ko‘ring."
+
+# ================= COMMANDS =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🤖 *SR AI Bot*\n\n"
+        "Men quyidagilarni qila olaman:\n"
+        "• Oddiy suhbat\n"
+        "• Bash / kodni to‘g‘ri formatda chiqarish\n"
+        "• Jadval, link, Markdown\n"
+        "• Kulgi uchun GIF va stiker\n"
+        "• Suhbatni eslab qolish\n\n"
+        "_2025-yildan beri rivojlantirilmoqda_",
+        parse_mode="Markdown"
+    )
+
+# ================= TEXT =================
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user.first_name
+    uid = update.effective_user.id
+    text = update.message.text
+
+    log_event(user, uid, "TEXT", text)
+
+    if is_identity_q(text):
+        await update.message.reply_text(identity_answer(), parse_mode="Markdown")
+        return
+
+    if is_sticker_request(text):
+        await update.message.reply_sticker(STICKER_OK)
+        return
+
+    if is_fun(text):
+        await update.message.reply_animation(GIF_LAUGH)
+        await update.message.reply_sticker(STICKER_LAUGH)
+        return
+
+    user_memory.setdefault(uid, []).append({"role": "user", "content": text})
+    reply = await gpt_reply(uid)
+
+    await update.message.reply_text(
+        safe_markdown(reply),
+        parse_mode="Markdown"
+    )
+
+# ================= STARTUP =================
 @app.on_event("startup")
 async def startup():
     global telegram_app
 
     telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    telegram_app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
-    )
-    telegram_app.add_handler(
-        MessageHandler(filters.VOICE, handle_voice)
-    )
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     await telegram_app.initialize()
     await telegram_app.start()
     await telegram_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
 
-    print("🤖 Telegram Webhook o‘rnatildi va bot tayyor")
+    print("✅ Telegram webhook o‘rnatildi")
 
+# ================= WEBHOOK =================
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     data = await request.json()
@@ -224,9 +183,9 @@ async def telegram_webhook(request: Request):
 
 @app.get("/")
 def health():
-    return {"status": "ok", "mode": "webhook"}
+    return {"status": "ok"}
 
 # ================= MAIN =================
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 10000))
+    port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
